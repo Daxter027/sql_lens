@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { apiConnect, setSessionToken } from '../api.js'
 
 export default function ConnectionScreen({ onConnected }) {
+  // No database here — we connect to the server (login's default DB) and pick the
+  // specific database on the next screen.
   const [form, setForm] = useState({
     server: '',
-    database: '',
     auth_type: 'windows',
     username: '',
     password: '',
@@ -58,18 +59,6 @@ export default function ConnectionScreen({ onConnected }) {
               placeholder="localhost or 192.168.1.10:1433"
               value={form.server}
               onChange={e => set('server', e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Database</label>
-            <input
-              id="field-database"
-              className="form-input"
-              placeholder="database name"
-              value={form.database}
-              onChange={e => set('database', e.target.value)}
               required
             />
           </div>

@@ -43,7 +43,7 @@ def _sanitise_error(exc: Exception) -> str:
 
 def _build_connection_string(
     server: str,
-    database: str,
+    database: Optional[str],
     auth_type: str,
     username: Optional[str],
     password: Optional[str],
@@ -53,16 +53,16 @@ def _build_connection_string(
     """
     Build a pyodbc connection string. The string is NEVER logged —
     callers must not log it either.
+
+    When `database` is falsy the DATABASE= clause is omitted, so the connection
+    lands on the login's default database (used by the connect-then-choose flow).
     """
     tsc = "yes" if trust_server_certificate else "no"
 
-    base = (
-        f"DRIVER={{{driver}}};"
-        f"SERVER={server};"
-        f"DATABASE={database};"
-        f"TrustServerCertificate={tsc};"
-        "Connection Timeout=30;"
-    )
+    base = f"DRIVER={{{driver}}};SERVER={server};"
+    if database:
+        base += f"DATABASE={database};"
+    base += f"TrustServerCertificate={tsc};Connection Timeout=30;"
 
     if auth_type == "windows":
         return base + "Trusted_Connection=yes;"
@@ -72,8 +72,8 @@ def _build_connection_string(
 
 def get_connection(
     server: str,
-    database: str,
-    auth_type: str,
+    database: Optional[str] = None,
+    auth_type: str = "windows",
     username: Optional[str] = None,
     password: Optional[str] = None,
     trust_server_certificate: bool = False,

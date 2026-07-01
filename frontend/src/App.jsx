@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import ConnectionScreen from './components/ConnectionScreen.jsx'
+import SelectDatabaseScreen from './components/SelectDatabaseScreen.jsx'
 import AnalysisScreen from './components/AnalysisScreen.jsx'
 import ExecutionScreen from './components/ExecutionScreen.jsx'
 import ReportScreen from './components/ReportScreen.jsx'
@@ -24,9 +25,20 @@ export default function App() {
   const [switchError, setSwitchError] = useState(null)
 
   const handleConnected = (sessionInfo) => {
-    // New DB session — drop any cached on-demand panel results from a prior one.
+    // Connected to the server (on the login's default DB). Drop any cached
+    // on-demand results, then let the user choose which database to analyze.
     clearPanelCaches()
     setSession(sessionInfo)
+    setScreen('selectdb')
+  }
+
+  // A database was chosen on the select screen (already switched server-side).
+  const handleDatabaseSelected = (database) => {
+    clearPanelCaches()
+    setAnalysisData(null)
+    setExecutionData(null)
+    setExecutedIds(new Set())
+    setSession(s => ({ ...s, database }))
     setScreen('analyze')
   }
 
@@ -111,25 +123,28 @@ export default function App() {
         {session && (
           <div className="topbar-meta">
             <span className="db-badge" title="Connected server">🖥️ {session.server}</span>
-            {/* Database switcher — change DB on the same server, no re-login. */}
-            <label title="Switch database on this server"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>DB</span>
-              <select
-                className="form-input"
-                value={session.database}
-                disabled={switching || databases.length === 0}
-                onChange={e => handleSwitchDatabase(e.target.value)}
-                style={{ width: 'auto', padding: '3px 8px', fontSize: '0.78rem' }}
-              >
-                {/* Ensure the current DB is always selectable even if the list hasn't loaded. */}
-                {!databases.includes(session.database) && (
-                  <option value={session.database}>{session.database}</option>
-                )}
-                {databases.map(db => <option key={db} value={db}>{db}</option>)}
-              </select>
-              {switching && <span className="spinner" style={{ width: 12, height: 12 }} />}
-            </label>
+            {/* Database switcher — hidden on the select-database screen (that IS the
+                picker); shown afterwards so the DB can be changed without re-login. */}
+            {screen !== 'selectdb' && (
+              <label title="Switch database on this server"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>DB</span>
+                <select
+                  className="form-input"
+                  value={session.database}
+                  disabled={switching || databases.length === 0}
+                  onChange={e => handleSwitchDatabase(e.target.value)}
+                  style={{ width: 'auto', padding: '3px 8px', fontSize: '0.78rem' }}
+                >
+                  {/* Ensure the current DB is always selectable even if the list hasn't loaded. */}
+                  {!databases.includes(session.database) && (
+                    <option value={session.database}>{session.database}</option>
+                  )}
+                  {databases.map(db => <option key={db} value={db}>{db}</option>)}
+                </select>
+                {switching && <span className="spinner" style={{ width: 12, height: 12 }} />}
+              </label>
+            )}
             {switchError && (
               <span style={{ fontSize: '0.72rem', color: 'var(--error)' }} title={switchError}>⚠ switch failed</span>
             )}
@@ -147,6 +162,13 @@ export default function App() {
       <main className="page">
         {screen === 'connect' && (
           <ConnectionScreen onConnected={handleConnected} />
+        )}
+        {screen === 'selectdb' && (
+          <SelectDatabaseScreen
+            session={session}
+            onSelected={handleDatabaseSelected}
+            onDisconnect={handleDisconnect}
+          />
         )}
         {screen === 'analyze' && (
           <AnalysisScreen

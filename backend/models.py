@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 
 class ConnectRequest(BaseModel):
     server: str = Field(..., description="SQL Server host name or IP[:port]")
-    database: str = Field(..., description="Target database name")
+    database: Optional[str] = Field(
+        None, description="Target database. Omit to connect to the login's default "
+                          "database; the specific DB is chosen after connecting.")
     auth_type: str = Field(..., description='"windows" or "sql"')
     username: Optional[str] = Field(None, description="SQL Auth username (sql auth only)")
     password: Optional[str] = Field(None, description="SQL Auth password (sql auth only) — never echoed back")

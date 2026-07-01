@@ -60,11 +60,12 @@ async def connect(req: ConnectRequest):
         if error:
             raise HTTPException(status_code=401, detail=error)
 
-        # Validate with a lightweight query — confirm DB is accessible
+        # Validate with a lightweight query and resolve the database we actually
+        # landed on (the login's default when none was requested).
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
+            cursor.execute("SELECT DB_NAME()")
+            resolved_db = cursor.fetchone()[0]
         except Exception as qe:
             conn.close()
             logger.error("Test query failed: %s", qe)
@@ -77,7 +78,7 @@ async def connect(req: ConnectRequest):
 
         token = store.create(
             server=req.server,
-            database=req.database,
+            database=resolved_db,
             auth_type=req.auth_type,
             username=req.username,
             password=req.password,
@@ -87,7 +88,7 @@ async def connect(req: ConnectRequest):
         return ConnectResponse(
             session_token=token,
             server=req.server,
-            database=req.database,
+            database=resolved_db,
         )
 
     except HTTPException:
