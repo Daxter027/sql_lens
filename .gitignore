@@ -1,0 +1,31 @@
+# Secrets — never commit the real .env (contains ANTHROPIC_API_KEY).
+# The committed template is .env.example.
+.env
+backend/.env
+**/.env
+!.env.example
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Editor / OS
+.vscode/
+.idea/
+*.log
+
+# SQL Server database files & backups — NEVER commit (multi-GB binaries that
+# contain the actual production/PII data). These live in this working folder.
+*.mdf
+*.ndf
+*.ldf
+*.bak
+*.trn
+*.trc
