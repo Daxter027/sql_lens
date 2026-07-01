@@ -1,97 +1,170 @@
-# SQL Server Storage Optimization Tool
+# SQL Lens
 
-A read-only analysis + safe-remediation agent for SQL Server databases. A FastAPI
-backend (`backend/`) runs deterministic checks against a connected database; a
-React/Vite frontend (`frontend/`) renders them as a tile grid with per-issue
-detail modals.
+A read-only diagnostic tool for SQL Server. It connects to a database, runs a set
+of metadata- and DMV-based checks, and reports findings in a web UI. For any
+change that carries risk, it generates a script for review rather than executing
+it. A FastAPI service performs the analysis; a React/Vite single-page app renders
+the results.
 
-## Running locally
+Tested against SQL Server 2008 through 2019 (Standard and Enterprise).
+
+## Design principles
+
+- **Read-only analysis.** Checks query system views and dynamic management views
+  only. They do not read or modify user data.
+- **Script generation over execution.** Index changes, compression, statistics
+  updates, permission changes, and cache operations are emitted as T-SQL for the
+  operator to run in a maintenance window. The tool does not apply them.
+- **Safe, reversible remediation only** for the small number of actions it does
+  perform (for example, disabling rather than dropping an unused index, or a
+  targeted log-file shrink).
+- **Credentials remain server-side.** The database password is used only to build
+  a connection string and is held in an in-memory session. The client receives an
+  opaque session token, never the password. Driver errors are sanitised before
+  reaching the browser.
+
+## Requirements
+
+- Python 3.10 or later, with `pyodbc` and the Microsoft ODBC Driver for SQL Server
+- Node.js 18 or later
+- A SQL Server login with read access to the target database. Some checks also
+  require `VIEW SERVER STATE`.
+
+## Running
+
+Backend:
 
 ```bash
-# Backend (Python 3.10+, pyodbc + ODBC Driver for SQL Server)
 cd backend
+pip install -r ../requirements.txt
 uvicorn main:app --reload          # http://127.0.0.1:8000
-
-# Frontend (Node 18+)
-cd frontend
-npm install
-npm run dev                        # http://localhost:5173  (proxies /api → backend)
 ```
 
-Tests (no pytest required — each file is runnable directly):
+Frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev                        # http://localhost:5173 (proxies /api to the backend)
+```
+
+Open the frontend, enter the server and database, choose Windows or SQL
+authentication, and connect. Once connected, the header provides a dropdown to
+switch to another database on the same server without re-entering credentials.
+
+## Diagnostics
+
+Most checks run automatically as a batch when analysis starts. Checks marked
+on-demand are heavier and run only when opened, via a button in their panel.
+
+### Storage
+
+| Check | Description | Run |
+|---|---|---|
+| Transaction Log Growth | Reclaimable log space, VLF count, recovery model, log-backup age | Auto |
+| Heap to Clustered Index | Heaps that would benefit from a clustered index | Auto |
+| Unused Index Audit | High-write, zero-read indexes; remediation disables (does not drop) them | Auto |
+| Ghost Pages | Ghost and forwarded record reconciliation | Auto |
+| Index Fragmentation | Fragmented indexes with REORGANIZE/REBUILD recommendation | Auto |
+| Data File Reclamation | Free space recoverable via TRUNCATEONLY or compaction | Auto |
+| Data Compression Savings | ROW/PAGE savings estimated with `sp_estimate_data_compression_savings`, plus `ALTER ... REBUILD` scripts | On-demand |
+| Duplicate and Overlapping Indexes | Exact-duplicate and prefix-overlap indexes, with DROP scripts | Auto |
+| Legacy Table Archival Candidates | Deterministic scoring of cold or legacy tables for review | Auto |
+| Structural Twin and Shadow Tables | Backup-style copies; remediation is a reversible rename | Auto |
+
+### Performance
+
+| Check | Description | Run |
+|---|---|---|
+| Missing Index Recommendations | Suggestions from `sys.dm_db_missing_index_*`, ranked, with CREATE INDEX scripts | Auto |
+| Stale Statistics | Statistics stale by age or modification count, with UPDATE STATISTICS scripts. Falls back to a 2008-compatible query where `sys.dm_db_stats_properties` is unavailable | Auto |
+| Ad-Hoc Workload and Plan Cache | Single-use plan-cache bloat, with configuration and cache-flush scripts | Auto |
+
+### Security
+
+| Check | Description | Run |
+|---|---|---|
+| Security Posture and PII Audit | Surface-area configuration, TDE status, orphaned users, `db_owner`/sysadmin membership, and heuristic detection of columns likely to hold PII | Auto |
+
+### Data quality and reporting
+
+| Check | Description | Run |
+|---|---|---|
+| Table Intelligence | Per-table profile: size, age, dependency count, indexes/triggers/foreign keys, activity, and SSRS report usage | On-demand |
+| AI Storage and Redundancy | Summarises the largest tables for naming and redundancy patterns using the Anthropic API | On-demand |
+| String Storage and Data Types | Oversized string columns and inappropriate data types | Auto |
+| Blank-String Contamination | Empty-string versus NULL contamination | Auto |
+
+Result tables can be copied to the clipboard or downloaded as an `.xlsx` file.
+On-demand results are cached while the session lasts and cleared when the
+database is switched or the connection is closed.
+
+## Configuration
+
+Settings are defined in `backend/config.py`. Several accept environment
+overrides. The backend loads `backend/.env` at startup if present; copy
+`backend/.env.example` to `backend/.env` to use it. Environment variables set in
+the operating system take precedence over values in `.env`.
+
+The AI Storage and Redundancy check is the only feature that makes an external
+network call. It sends table names, row counts, and sizes — not row contents — to
+the Anthropic API. All other checks operate entirely against the SQL Server
+instance.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | (empty) | Required for the AI check only. Obtained from the Anthropic console. |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Model identifier; also selectable per run in the UI |
+| `ANTHROPIC_MAX_TOKENS` | `4000` | Maximum report length |
+| `ANTHROPIC_TIMEOUT_SECONDS` | `120` | HTTP timeout |
+| `STORAGE_REDUNDANCY_ROW_CAP` | `200` | Maximum number of tables sent to the model |
+
+If no key is configured, only the AI check is affected; it reports a clear error
+state and every other check continues to work.
+
+## Testing
+
+Tests are self-contained Python scripts and do not require pytest:
 
 ```bash
 cd backend
+python tests/test_new_checks.py
+python tests/test_table_intelligence.py
+python tests/test_storage_redundancy.py
 python tests/test_index_fragmentation.py
 python tests/test_data_file_reclaim.py
 python tests/test_archival_candidates.py
-python tests/test_storage_redundancy.py
 ```
 
----
+## Project structure
 
-## AI Storage & Redundancy Analysis (Anthropic Claude API)
+```
+backend/
+  main.py            FastAPI application and router registration
+  config.py          thresholds and the .env loader
+  db.py              pyodbc connection factory with sanitised errors
+  session.py         in-memory session store keyed by opaque token
+  analysis/          one module per check, each exposing analyze(conn)
+  routers/           connect, analyze, execute, report, and on-demand endpoints
+  tests/             runnable unit tests
+frontend/
+  src/components/    tile grid, detail modal, per-check panels, export controls
+  src/api.js         fetch wrappers for the backend API
+```
 
-One feature — **"AI Storage & Redundancy Analysis"** — uses the **Anthropic
-[Claude API](https://www.anthropic.com)**. It finds the largest ~20% of tables by
-storage and has Claude produce a short, fixed-template Markdown report. It is
-**on-demand** (a "Run" button inside its tile's modal), not part of the automatic
-analysis batch, because it makes a network call.
+## Security considerations
 
-> **Privacy note:** this sends table **names, row counts and sizes** (never row
-> contents) to Anthropic's cloud API. Earlier versions used a local Ollama model
-> that kept everything on-machine; this no longer does.
+- The database password is never logged, never returned to the client, and is
+  used only to construct the connection string.
+- The tool does not drop tables, does not terminate arbitrary sessions, and does
+  not run the higher-risk remediation scripts on the operator's behalf.
+- `backend/.env` (which holds the API key) and SQL Server data files
+  (`*.mdf`, `*.ldf`, `*.bak`) are excluded from version control via `.gitignore`.
 
-### Requirements — an Anthropic API key
+## Technology
 
-This feature will not work until an API key is configured on the **backend**.
+Backend: FastAPI, pyodbc, Pydantic, standard-library `urllib` (no third-party SDK
+for the API call), and a thread pool for parallel checks.
 
-1. **Get a key** — https://console.anthropic.com (`sk-ant-…`).
-2. **Set it as an environment variable** (the backend reads it at startup; it is
-   never sent to the browser and never logged):
-   ```powershell
-   # PowerShell — persists for future processes (then restart uvicorn):
-   setx ANTHROPIC_API_KEY "sk-ant-..."
-   # or for the current shell only:
-   $env:ANTHROPIC_API_KEY = "sk-ant-..."
-   ```
-3. **Restart the backend** so it picks up the key.
-
-A run typically completes in **a few seconds**. The report is intentionally
-surface-level (naming patterns, near-identical row counts, size tiering) — the
-prompt uses a fixed checklist + template for consistent output.
-
-### Configuration
-
-Set in `backend/config.py`, each overridable by an environment variable:
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | _(empty)_ | **Required.** API key — env only, never hard-code |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Model id (e.g. `claude-haiku-4-5`) |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | API endpoint |
-| `ANTHROPIC_VERSION` | `2023-06-01` | `anthropic-version` header |
-| `ANTHROPIC_TIMEOUT_SECONDS` | `120` | HTTP timeout |
-| `ANTHROPIC_MAX_TOKENS` | `4000` | Max output tokens (raise if a report is clipped) |
-| `ANTHROPIC_TEMPERATURE` | `0.25` | Low — consistency over creativity |
-| `STORAGE_REDUNDANCY_ROW_CAP` | `200` | Max rows sent to the model |
-
-The model can also be overridden **per request** from the UI dropdown (or
-`POST /api/storage-redundancy?model=claude-haiku-4-5`) without a restart.
-
-Example (PowerShell): `$env:ANTHROPIC_MODEL = "claude-haiku-4-5"; uvicorn main:app --reload`
-
-### How it works (single function)
-
-The entire feature — the SQL query for the top-20% tables **and** the Claude API
-call — is one function: `run_storage_redundancy_analysis(conn)` in
-`backend/analysis/storage_redundancy.py`, exposed via `POST /api/storage-redundancy`.
-The SQL step and the model step run sequentially in that one body; only the
-combined result (table data + model markdown + summary) is returned. If the SQL
-step fails, the model is never called. The Anthropic Messages API is called with
-stdlib `urllib` (no SDK dependency).
-
-Errors surface as one specific state in the UI: **API key problem** (missing/
-invalid key), **Anthropic API unreachable** (no network), **model not found**,
-**rate limited**, **timeout**, **API error**, **database error**, or **empty
-database**.
+Frontend: React 18, Vite, SheetJS (loaded on demand for exports), and
+react-markdown.
